@@ -18,7 +18,7 @@ def _get_schemas(schema_fn):
     return db_id_to_schema
 
 
-def link_schemas(data_dir='~/Desktop'):
+def link_schemas(data_dir='~/Desktop', max_n=1000):
     schema_fn = os.path.expanduser(os.path.join(data_dir, 'spider', 'tables.json'))
     db_id_to_schema = _get_schemas(schema_fn)
 
@@ -26,6 +26,9 @@ def link_schemas(data_dir='~/Desktop'):
     train_data_other = os.path.expanduser(os.path.join(data_dir, 'spider', 'train_others.json'))
     train_data = json.load(open(train_data_fn, 'r')) + json.load(open(train_data_other, 'r'))
     dev_data = json.load(open(os.path.expanduser(os.path.join(data_dir, 'spider', 'dev.json')), 'r'))
+
+    train_data = train_data[:min(max_n, len(train_data))]
+    dev_data = dev_data[:min(max_n, len(dev_data))]
 
     [_augment_example(ex, db_id_to_schema) for ex in train_data]
     [_augment_example(ex, db_id_to_schema) for ex in dev_data]
