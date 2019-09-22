@@ -4,21 +4,58 @@ import torch
 import torch.nn as nn
 
 from load import link_schemas
-from vocab import generate_embedding_matrix
 from models.entity_linker import EntityLinker
+from utils import tokens_to_ids
+from vocab import generate_embedding_matrix
+
 
 MAX_COL_TOK_LEN = 5  # Maximum # of words in each column for truncation (i.e. 'patient name id' has col_tok_len of 3)
-BATCH_SIZE = 32
 
 
-def _get_schema_col_idx(col_tok, schema):
-    colum_names_flat = list(map(lambda x: x[1], schema['column_names']))
-    table, column = col_tok.split('::')
-    # TODO in case there is a db with the same col name across tables, disambiguate by using table name
-    return colum_names_flat.index(column)
+def extract_labels(data):
+    def _get_schema_col_idx(col_tok, schema):
+        column_names_flat = list(map(lambda x: x[1], schema['column_names']))
+        table, column = col_tok.split('::')
+        # TODO: in case there is a db with the same col name across tables, disambiguate by using table name
+        return column_names_flat.index(column)
+
+    for example in data:
+        col_tok_idxs = map(lambda x: _get_schema_col_idx(x, example['schema']),
+                           filter(lambda x: '::' in x, example['query_toks_clean']))
+        example['y'] = list(col_tok_idxs)
+
+
+def generate_batch_idxs(data_len, batch_size, shuffle=False):
+    batch_idxs = np.arange(data_len)
+    if shuffle:
+        np.random.shuffle(batch_idxs)
+    num_batches = data_len // batch_size
+    batches_by_idx = batch_idxs[:num_batches * batch_size].reshape(num_batches, batch_size)
+    return batches_by_idx
+
+
+def run_batch(X, y, batch_idxs):
+    batch_X, batch_y = tensorize_batch(X, y, batch_idxs)
+    output = model(batch_X)
+
+    batch_y_flat = batch_y.view(-1)
+    output_flat = output.view(-1)
+
+    valid_idxs = (batch_y_flat >= 0).nonzero().squeeze(-1)
+    batch_y_valid = torch.index_select(batch_y_flat, 0, valid_idxs).unsqueeze(-1)
+    output_valid = torch.index_select(output_flat, 0, valid_idxs).unsqueeze(-1)
+
+    return loss_func(output_valid, batch_y_valid.float())
 
 
 def tensorize_batch(X, y, idxs):
+    """
+    :param X: question_ids, col_ids
+    :param y: column indices indicating which columns in col_ids are used in the query for question_ids
+    :param idxs: indices to extract for this batch --> len(batch_size)
+    :return: (padded torch.question_ids, padded torch.col_ids, num question tokens for each question in batch,
+    num cols for each question in batch), padded one-hot torch.y
+    """
     question_ids, col_ids = X
     batch_qids, batch_cids, batch_y = [], [], []
     num_qs, num_cols = [], []
@@ -46,61 +83,34 @@ def tensorize_batch(X, y, idxs):
     return (batch_qid_torch, batch_cid_torch, num_qs, num_cols), batch_y_torch
 
 
-def extract_labels(example):
-    example['y'] = [_get_schema_col_idx(query_tok, example['schema'])
-                    for query_tok in example['query_toks_clean'] if '::' in query_tok]
-
-
-def tokens_to_ids(dataset, vocab):
-    question_ids, col_ids, ys_onehot = [], [], []
-    for ex in dataset:
-        question_id_seq = vocab.tok_seq_to_ids(ex['question_toks'])
-        col_id_seqs = []
-        y_onehot = [0] * len(ex['schema']['column_names'])
-        for column in ex['schema']['column_names']:
-            col_id_seq = vocab.tok_seq_to_ids(column[1].split())
-            if len(col_id_seq) > MAX_COL_TOK_LEN:
-                col_id_seq = col_id_seq[:MAX_COL_TOK_LEN]
-            else:
-                col_id_seq += [0] * (MAX_COL_TOK_LEN - len(col_id_seq))  # Zero-pad
-            col_id_seqs.append(col_id_seq)
-        question_ids.append(question_id_seq)
-        col_ids.append(col_id_seqs)
-        for y_idx in ex['y']:
-            y_onehot[y_idx] = 1
-        ys_onehot.append(y_onehot)
-    return (question_ids, col_ids), ys_onehot
-
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Entity Link Questions To Columns for Spider Text-2-SQL dataset.')
-    parser.add_argument('--epochs', type=int, default=100, help='Training Epochs')
+    parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('-debug', default=False, action='store_true')
+    parser.add_argument('--epochs', type=int, default=100, help='Training Epochs')
     args = parser.parse_args()
 
-    train_data, dev_data = link_schemas(max_n=BATCH_SIZE if args.debug else 9999999)
+    train_data, dev_data = link_schemas(max_n=args.batch_size if args.debug else 9999999)
     print('Linked db schemas for {} training examples and {} dev examples.'.format(len(train_data), len(dev_data)))
 
-    [extract_labels(ex) for ex in train_data]
-    [extract_labels(ex) for ex in dev_data]
+    # Assign labels which are just the indices of column names used in the SQL query for a given question
+    # i.e. SELECT COUNT(*) FROM people WHERE name = 'griffin'.  ['*', 'id', 'name'] --> y = [0, 2]
+    extract_labels(train_data)
+    extract_labels(dev_data)
 
     # Generate GloVe embedding matrix and instantiate vocabulary as intersection of dataset tokens and GloVe vectors
     # Make sure to include every column even if not in GloVE --> in this case, assign as random vector
     print('Generating embedding matrix and vocabulary.')
-    vocab, embed_matrix = generate_embedding_matrix(train_data)
+    vocab, embed_matrix = generate_embedding_matrix(train_data, dev_data)
 
     print('Converting tokens to ids.')
-    train_x, train_y = tokens_to_ids(train_data, vocab)
-    dev_x, dev_y = tokens_to_ids(dev_data, vocab)
+    train_x, train_y = tokens_to_ids(train_data, vocab, max_col_token_len=MAX_COL_TOK_LEN)
+    dev_x, dev_y = tokens_to_ids(dev_data, vocab, max_col_token_len=MAX_COL_TOK_LEN)
     
     model = EntityLinker(embed_matrix=embed_matrix)
 
-    # arange training sequence
-    train_batch_idxs = np.arange(len(train_y))
-    dev_batch_idxs = np.arange(len(dev_y))
-
-    pos_weight = torch.Tensor([10.0])
-    loss_func = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    # 10x fewer examples of positive case - a given column is in the query (i.e. most columns unused)
+    loss_func = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor([10.0]))
 
     trainable_params = list(filter(lambda x: x.requires_grad, model.parameters()))
     optimizer = torch.optim.Adam(trainable_params, lr=0.001)
@@ -108,47 +118,25 @@ if __name__ == '__main__':
     print('Starting Training...')
     for epoch_idx in range(args.epochs):
         model.train()
-        # Randomize batches for epoch
-        np.random.shuffle(train_batch_idxs)
-        train_num_batches = len(train_y) // BATCH_SIZE
-        train_batches_by_idx = train_batch_idxs[:train_num_batches * BATCH_SIZE].reshape(train_num_batches, BATCH_SIZE)
 
         train_batch_loss = 0.
-        for batch_idx, batch_idx_set in enumerate(train_batches_by_idx):
+        for batch_idx, batch_idx_set in enumerate(generate_batch_idxs(len(train_data), args.batch_size, shuffle=True)):
             optimizer.zero_grad()
-            X, y = tensorize_batch(train_x, train_y, batch_idx_set)
-            output = model(X)
-
-            y_flat = y.view(-1)
-            output_flat = output.view(-1)
-
-            valid_idxs = (y_flat >= 0).nonzero().squeeze(-1)
-            y_valid = torch.index_select(y_flat, 0, valid_idxs).unsqueeze(-1)
-            output_valid = torch.index_select(output_flat, 0, valid_idxs).unsqueeze(-1)
-            loss = loss_func(output_valid, y_valid.float())
+            loss = run_batch(train_x, train_y, batch_idx_set)
             loss.backward()
             optimizer.step()
             train_batch_loss += loss.item()
 
             if epoch_idx == 0 and (batch_idx + 1) % 25 == 0:
-                print('Epoch 0 Batch {} Running Avg Loss is {}'.format(
+                print('Epoch 1 Batch {} Running Avg Loss is {}'.format(
                     batch_idx + 1, train_batch_loss / float((batch_idx + 1))))
-        print('Epoch {} Training Loss: {}'.format(epoch_idx + 1, train_batch_loss / float(train_num_batches)))
+        print('Epoch {} Training Loss: {}'.format(epoch_idx + 1, train_batch_loss / float(batch_idx + 1)))
 
         if not args.debug:
-            model.eval()
-            dev_num_batches = len(dev_batch_idxs) // BATCH_SIZE
-            dev_batches_by_idx = dev_batch_idxs[:dev_num_batches * BATCH_SIZE].reshape(dev_num_batches, BATCH_SIZE)
-
-            dev_batch_loss = 0.
-            for batch_idx, batch_idx_set in enumerate(dev_batches_by_idx):
-                X, y = tensorize_batch(dev_x, dev_y, batch_idx_set)
-                output = model(X)
-                y_flat = y.view(-1)
-                output_flat = output.view(-1)
-                valid_idxs = (y_flat >= 0).nonzero().squeeze(-1)
-                y_valid = torch.index_select(y_flat, 0, valid_idxs).unsqueeze(-1)
-                output_valid = torch.index_select(output_flat, 0, valid_idxs).unsqueeze(-1)
-                loss = loss_func(output_valid, y_valid.float())
-                dev_batch_loss += loss.item()
-            print('Epoch {} Dev Loss: {}'.format(epoch_idx + 1, dev_batch_loss / float(dev_num_batches)))
+            with torch.no_grad():
+                model.eval()
+                dev_batch_loss = 0.
+                for batch_idx, batch_idx_set in enumerate(generate_batch_idxs(len(dev_data), args.batch_size)):
+                    loss = run_batch(dev_x, dev_y, batch_idx_set)
+                    dev_batch_loss += loss.item()
+                print('Epoch {} Dev Loss: {}'.format(epoch_idx + 1, dev_batch_loss / float(batch_idx + 1)))

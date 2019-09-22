@@ -17,7 +17,7 @@ class EntityLinker(nn.Module):
         self.column_summarizer = ColumnSummarizer(embeddings=self.embeddings)
         self.question_summarizer = QuestionSummarizer(embeddings=self.embeddings)
 
-        self.hidden_layer = nn.Linear(embed_dim * 4, embed_dim)
+        self.hidden_layer = nn.Linear(embed_dim * 5, embed_dim)
         self.output = nn.Linear(embed_dim, 1)
         self.tanh = nn.Tanh()
         self.softmax = nn.Softmax(dim=-1)
@@ -46,9 +46,9 @@ class EntityLinker(nn.Module):
     def forward(self, X):
         (q_ids, c_ids, num_qs, num_cols) = X
         c_h = self.column_summarizer(c_ids)
-        q_h = self.question_summarizer(q_ids)
-
+        q_h, q_summary = self.question_summarizer(q_ids)
         weighted_q = self.compute_att(c_h, q_h, num_cols, num_qs)
-
-        q_aware_c_h = torch.cat([c_h, weighted_q, c_h * weighted_q, torch.abs(c_h - weighted_q)], dim=-1)
+        q_summary_tiled = q_summary.unsqueeze(1).repeat(1, c_h.size()[1], 1)
+        q_aware_c_h = torch.cat(
+            [q_summary_tiled, c_h, weighted_q, c_h * weighted_q, torch.abs(c_h - weighted_q)], dim=-1)
         return self.output(self.tanh(self.hidden_layer(q_aware_c_h)))

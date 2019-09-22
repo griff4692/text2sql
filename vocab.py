@@ -47,17 +47,23 @@ class Vocab:
         return list(map(lambda x: self.get_idx(x.lower()), toks))
 
 
-def generate_embedding_matrix(train_data, embed_fn='~/Desktop/glove.6B/glove.6B.300d.txt'):
+def _add_tokens(data, full_tok_set, col_tok_set):
+    for ex in data:
+        for tok in ex['question_toks']:
+            full_tok_set.add(tok.lower())
+    for col in ex['schema']['column_names']:
+        for col_split in col[1].split():
+            full_tok_set.add(col_split.lower())
+            col_tok_set.add(col_split.lower())
+
+
+def generate_embedding_matrix(train_data, dev_data, embed_fn='~/Desktop/glove.6B/glove.6B.300d.txt'):
     vocab = Vocab()
     data_tokens = set()
     col_toks = set()
-    for ex in train_data:
-        for tok in ex['question_toks']:
-            data_tokens.add(tok.lower())
-        for col in ex['schema']['column_names']:
-            for col_split in col[1].split():
-                data_tokens.add(col_split.lower())
-                col_toks.add(col_split.lower())
+    _add_tokens(train_data, data_tokens, col_toks)
+    _add_tokens(dev_data, data_tokens, col_toks)
+
     embeddings = open(os.path.expanduser(embed_fn), 'r').readlines()
     embed_matrix = list([[0.] * EMBED_DIM])
     embed_matrix.append([0.] * EMBED_DIM)

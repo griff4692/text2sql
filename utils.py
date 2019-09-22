@@ -55,3 +55,24 @@ def _clean_column_name(candidate_column_name, column_names, column_names_origina
         return '{}::{}'.format(table_name, column_name)
     else:
         return candidate_column_name
+
+
+def tokens_to_ids(dataset, vocab, max_col_token_len=5):
+    question_ids, col_ids, ys_onehot = [], [], []
+    for ex in dataset:
+        question_id_seq = vocab.tok_seq_to_ids(ex['question_toks'])
+        col_id_seqs = []
+        y_onehot = [0] * len(ex['schema']['column_names'])
+        for column in ex['schema']['column_names']:
+            col_id_seq = vocab.tok_seq_to_ids(column[1].split())
+            if len(col_id_seq) > max_col_token_len:
+                col_id_seq = col_id_seq[:max_col_token_len]
+            else:
+                col_id_seq += [0] * (max_col_token_len - len(col_id_seq))  # Zero-pad
+            col_id_seqs.append(col_id_seq)
+        question_ids.append(question_id_seq)
+        col_ids.append(col_id_seqs)
+        for y_idx in ex['y']:
+            y_onehot[y_idx] = 1
+        ys_onehot.append(y_onehot)
+    return (question_ids, col_ids), ys_onehot

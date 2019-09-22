@@ -18,7 +18,5 @@ class QuestionSummarizer(nn.Module):
         bsize, max_toks = q_ids.shape
         q_embeds = self.embeddings(q_ids)
 
-        q_h, _ = self.summarizer(q_embeds)
-        return q_h
-        # _, (q_summary, _) = self.summarizer(q_embeds)
-        # return q_summary.transpose(1, 0).contiguous().view(bsize, -1)
+        q_h, (q_summary, _) = self.summarizer(q_embeds)
+        return q_h, q_summary.transpose(1, 0).contiguous().view(bsize, -1)
