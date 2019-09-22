@@ -1,6 +1,8 @@
 import numpy as np
 import os
 
+EMBED_DIM = 300
+
 PAD_TOKEN = 'PAD'
 UNK_TOKEN = 'UNK'
 
@@ -46,7 +48,6 @@ class Vocab:
 
 
 def generate_embedding_matrix(train_data, embed_fn='~/Desktop/glove.6B/glove.6B.300d.txt'):
-    embed_dim = 300
     vocab = Vocab()
     data_tokens = set()
     col_toks = set()
@@ -58,8 +59,8 @@ def generate_embedding_matrix(train_data, embed_fn='~/Desktop/glove.6B/glove.6B.
                 data_tokens.add(col_split.lower())
                 col_toks.add(col_split.lower())
     embeddings = open(os.path.expanduser(embed_fn), 'r').readlines()
-    embed_matrix = list([[0.] * embed_dim])
-    embed_matrix.append([0.] * embed_dim)
+    embed_matrix = list([[0.] * EMBED_DIM])
+    embed_matrix.append([0.] * EMBED_DIM)
     for e in embeddings:
         esplit = e.split()
         token = esplit[0]
@@ -67,12 +68,12 @@ def generate_embedding_matrix(train_data, embed_fn='~/Desktop/glove.6B/glove.6B.
             vidx = vocab.add_token_get_idx(token)
             assert vidx == len(embed_matrix)
             embed_matrix.append(list(map(float, esplit[1:])))
-    embed_matrix[vocab.get_idx(UNK_TOKEN)] = list(np.random.normal(size=(embed_dim, )))
+    embed_matrix[vocab.get_idx(UNK_TOKEN)] = list(np.random.normal(size=(EMBED_DIM, )))
     vocab.set_random_idx()
 
     # Add non-GloVE column names as random embeddings
     for col_tok in col_toks - set(vocab.i2t):
         vidx = vocab.add_token_get_idx(col_tok)
         assert vidx == len(embed_matrix)
-        embed_matrix.append(list(np.random.normal(size=(embed_dim, ))))
+        embed_matrix.append(list(np.random.normal(size=(EMBED_DIM, ))))
     return vocab, np.array(embed_matrix)

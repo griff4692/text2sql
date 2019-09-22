@@ -6,7 +6,8 @@ class QuestionSummarizer(nn.Module):
         super(QuestionSummarizer, self).__init__()
         self.embeddings = embeddings
         embed_dim= self.embeddings.embedding_dim
-        self.summarizer = nn.LSTM(input_size=embed_dim, hidden_size=embed_dim // 2, batch_first=True, bidirectional=True)
+        self.summarizer = nn.LSTM(
+            input_size=embed_dim, hidden_size=embed_dim // 2, batch_first=True, bidirectional=True)
 
     def forward(self, q_ids):
         """
@@ -16,5 +17,8 @@ class QuestionSummarizer(nn.Module):
         """
         bsize, max_toks = q_ids.shape
         q_embeds = self.embeddings(q_ids)
-        _, (q_summary, _) = self.summarizer(q_embeds)
-        return q_summary.transpose(1, 0).contiguous().view(bsize, -1)
+
+        q_h, _ = self.summarizer(q_embeds)
+        return q_h
+        # _, (q_summary, _) = self.summarizer(q_embeds)
+        # return q_summary.transpose(1, 0).contiguous().view(bsize, -1)
